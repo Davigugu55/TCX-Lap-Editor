@@ -128,21 +128,32 @@
 
     function setXmlString(node, tagName, value) {
         let el = node.getElementsByTagName(tagName)[0];
-        if (el) {
-            el.textContent = value;
-        } else {
-            el = xmlDoc.createElementNS(node.namespaceURI || "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2", tagName);
-            el.textContent = value;
+        if (!el) {
+            const doc = node.ownerDocument || xmlDoc;
+            el = doc.createElementNS(node.namespaceURI || "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2", tagName);
             node.appendChild(el);
         }
+        el.textContent = value;
+    }
+
+    function setXmlNumber(node, tagName, value) {
+        setXmlString(node, tagName, String(value));
     }
 
     function setNestedXmlValue(node, parentTag, childTag, value) {
         let parent = node.getElementsByTagName(parentTag)[0];
-        if (parent) {
-            let child = parent.getElementsByTagName(childTag)[0];
-            if (child) child.textContent = value;
+        if (!parent) {
+            const doc = node.ownerDocument || xmlDoc;
+            parent = doc.createElementNS(node.namespaceURI || "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2", parentTag);
+            node.appendChild(parent);
         }
+        let child = parent.getElementsByTagName(childTag)[0];
+        if (!child) {
+            const doc = parent.ownerDocument || xmlDoc;
+            child = doc.createElementNS(parent.namespaceURI || node.namespaceURI || "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2", childTag);
+            parent.appendChild(child);
+        }
+        child.textContent = value;
     }
 
     function getMinHr(lapNode) {
@@ -234,7 +245,12 @@
         let newTotalTime = getXmlValue(targetLap, 'TotalTimeSeconds'), newDistance = getXmlValue(targetLap, 'DistanceMeters'), newCalories = getXmlValue(targetLap, 'Calories'), newMaxSpeed = getXmlValue(targetLap, 'MaximumSpeed');
         let weightedHRAccum = getNestedXmlValue(targetLap, 'AverageHeartRateBpm', 'Value') * newTotalTime, totalHRTime = newTotalTime, newMaxHR = getNestedXmlValue(targetLap, 'MaximumHeartRateBpm', 'Value'), newMinHR = getMinHr(targetLap);
         let newIntensity = getXmlString(targetLap, 'Intensity', 'Active');
-        const targetTrack = targetLap.getElementsByTagName('Track')[0];
+        let targetTrack = targetLap.getElementsByTagName('Track')[0];
+        if (!targetTrack) {
+            const doc = targetLap.ownerDocument || xmlDoc;
+            targetTrack = doc.createElementNS(targetLap.namespaceURI || "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2", 'Track');
+            targetLap.appendChild(targetTrack);
+        }
 
         for (let i = 1; i < selected.length; i++) {
             const source = laps[selected[i]];
@@ -250,10 +266,10 @@
             Array.from(source.getElementsByTagName('Trackpoint')).forEach(tp => targetTrack.appendChild(tp));
             source.setAttribute('data-delete', 'true');
         }
-        targetLap.getElementsByTagName('TotalTimeSeconds')[0].textContent = newTotalTime;
-        targetLap.getElementsByTagName('DistanceMeters')[0].textContent = newDistance;
-        targetLap.getElementsByTagName('Calories')[0].textContent = newCalories;
-        targetLap.getElementsByTagName('MaximumSpeed')[0].textContent = newMaxSpeed;
+        setXmlNumber(targetLap, 'TotalTimeSeconds', newTotalTime);
+        setXmlNumber(targetLap, 'DistanceMeters', newDistance);
+        setXmlNumber(targetLap, 'Calories', newCalories);
+        setXmlNumber(targetLap, 'MaximumSpeed', newMaxSpeed);
         setNestedXmlValue(targetLap, 'AverageHeartRateBpm', 'Value', Math.round(weightedHRAccum / totalHRTime));
         setNestedXmlValue(targetLap, 'MaximumHeartRateBpm', 'Value', Math.round(newMaxHR));
         if (newMinHR !== null && getNestedXmlValue(targetLap, 'MinimumHeartRateBpm', 'Value') !== null) setNestedXmlValue(targetLap, 'MinimumHeartRateBpm', 'Value', Math.round(newMinHR));
