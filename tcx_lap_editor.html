@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TCX Lap Editor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <style>
+        body { background-color: #f8f9fa; }
+        .empty-state { padding: 4rem 0; text-align: center; color: #6c757d; }
+        .selected-row { background-color: #e2e3e5 !important; }
+        table { vertical-align: middle; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container">
+        <span class="navbar-brand mb-0 h1"><i class="bi bi-activity"></i> TCX Lap Editor</span>
+        <button class="btn btn-success d-none" id="downloadBtn">
+            <i class="bi bi-download"></i> Download Modified TCX
+        </button>
+    </div>
+</nav>
+
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">Upload Workout</h5>
+                    <input class="form-control" type="file" id="tcxFileInput" accept=".tcx">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-4 d-none" id="workspaceContainer">
+        <div class="col-md-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
+                    <h5 class="mb-0">Workout Laps</h5>
+                    <div class="btn-group" role="group">
+                        <button type="button" class="btn btn-outline-primary" id="mergeBtn" disabled>
+                            <i class="bi bi-intersect"></i> Merge Selected
+                        </button>
+                        <button type="button" class="btn btn-outline-danger" id="deleteBtn" disabled>
+                            <i class="bi bi-trash"></i> Delete Selected
+                        </button>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0" id="lapsTable">
+                        <thead class="table-light">
+                            <tr>
+                                <th scope="col" style="width: 50px;">
+                                    <input class="form-check-input" type="checkbox" id="selectAll">
+                                </th>
+                                <th scope="col">Lap #</th>
+                                <th scope="col">Start Time</th>
+                                <th scope="col">Time</th>
+                                <th scope="col">Distance</th>
+                                <th scope="col">Min HR</th>
+                                <th scope="col">Max HR</th>
+                                <th scope="col">Avg HR</th>
+                                <th scope="col">Calories</th>
+                                <th scope="col" style="width: 140px;">Intensity</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lapsTbody">
+                            <!-- Rows will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="emptyState" class="empty-state">
+        <i class="bi bi-file-earmark-arrow-up display-1 mb-3 d-block"></i>
+        <h3>No file loaded</h3>
+        <p>Upload a .tcx file to start editing your laps.</p>
+    </div>
+</div>
+
+<script>
+    let xmlDoc = null;
+    let originalFilename = "modified_workout.tcx";
+
+    const fileInput = document.getElementById('tcxFileInput');
+    const workspaceContainer = document.getElementById('workspaceContainer');
+    const emptyState = document.getElementById('emptyState');
+    const lapsTbody = document.getElementById('lapsTbody');
+    const mergeBtn = document.getElementById('mergeBtn');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const selectAllCheckbox = document.getElementById('selectAll');
+
+    function formatTime(totalSeconds) {
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = Math.floor(totalSeconds % 60);
+        if (hours > 0) {
+            return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    function getXmlValue(node, tagName, fallback = 0) {
+        const el = node.getElementsByTagName(tagName)[0];
+        return el ? parseFloat(el.textContent) : fallback;
+    }
+
+    function getNestedXmlValue(node, parentTag, childTag, fallback = null) {
+        const parent = node.getElementsByTagName(parentTag)[0];
+        if (parent) {
+            const child = parent.getElementsByTagName(childTag)[0];
+            return child ? parseFloat(child.textContent) : fallback;
+        }
+        return fallback;
+    }
+
+    function getXmlString(node, tagName, fallback = '') {
+        const el = node.getElementsByTagName(tagName)[0];
+        return el ? el.textContent : fallback;
+    }
+
+    function setXmlString(node, tagName, value) {
+        let el = node.getElementsByTagName(tagName)[0];
+        if (el) {
+            el.textContent = value;
+        } else {
+            el = xmlDoc.createElementNS(node.namespaceURI || "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2", tagName);
+            el.textContent = value;
+            node.appendChild(el);
+        }
+    }
+
+    function setNestedXmlValue(node, parentTag, childTag, value) {
+        let parent = node.getElementsByTagName(parentTag)[0];
+        if (parent) {
+            let child = parent.getElementsByTagName(childTag)[0];
+            if (child) child.textContent = value;
+        }
+    }
+
+    function getMinHr(lapNode) {
+        const explicitMin = getNestedXmlValue(lapNode, 'MinimumHeartRateBpm', 'Value');
+        if (explicitMin !== null) return explicitMin;
+        let minHr = Infinity;
+        const hrNodes = lapNode.getElementsByTagName('HeartRateBpm');
+        for(let i = 0; i < hrNodes.length; i++) {
+            const valNode = hrNodes[i].getElementsByTagName('Value')[0];
+            if (valNode) {
+                const val = parseFloat(valNode.textContent);
+                if (!isNaN(val) && val < minHr) minHr = val;
+            }
+        }
+        return minHr === Infinity ? null : minHr;
+    }
+
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        originalFilename = file.name;
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const parser = new DOMParser();
+            xmlDoc = parser.parseFromString(event.target.result, "application/xml");
+            renderLaps();
+            emptyState.classList.add('d-none');
+            workspaceContainer.classList.remove('d-none');
+            downloadBtn.classList.remove('d-none');
+        };
+        reader.readAsText(file);
+    });
+
+    function renderLaps() {
+        lapsTbody.innerHTML = '';
+        const laps = xmlDoc.getElementsByTagName('Lap');
+        for (let i = 0; i < laps.length; i++) {
+            const lap = laps[i];
+            const startTime = lap.getAttribute('StartTime');
+            const avgHr = getNestedXmlValue(lap, 'AverageHeartRateBpm', 'Value');
+            const maxHr = getNestedXmlValue(lap, 'MaximumHeartRateBpm', 'Value');
+            const minHr = getMinHr(lap);
+            
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><input class="form-check-input lap-checkbox" type="checkbox" value="${i}"></td>
+                <td><strong>${i + 1}</strong></td>
+                <td>${new Date(startTime).toLocaleTimeString()}</td>
+                <td>${formatTime(getXmlValue(lap, 'TotalTimeSeconds'))}</td>
+                <td>${(getXmlValue(lap, 'DistanceMeters') / 1000).toFixed(2)} km</td>
+                <td>${minHr !== null ? Math.round(minHr) + ' bpm' : '-'}</td>
+                <td>${maxHr !== null ? Math.round(maxHr) + ' bpm' : '-'}</td>
+                <td>${avgHr !== null ? Math.round(avgHr) + ' bpm' : '-'}</td>
+                <td>${getXmlValue(lap, 'Calories')} kcal</td>
+                <td>
+                    <select class="form-select form-select-sm intensity-select" data-lap-index="${i}">
+                        <option value="Active" ${getXmlString(lap, 'Intensity') === 'Active' ? 'selected' : ''}>Active</option>
+                        <option value="Resting" ${getXmlString(lap, 'Intensity') === 'Resting' ? 'selected' : ''}>Resting</option>
+                    </select>
+                </td>
+            `;
+            tr.querySelector('.lap-checkbox').addEventListener('change', function() {
+                this.closest('tr').classList.toggle('selected-row', this.checked);
+                updateActionButtons();
+            });
+            tr.querySelector('.intensity-select').addEventListener('change', function() {
+                setXmlString(xmlDoc.getElementsByTagName('Lap')[this.getAttribute('data-lap-index')], 'Intensity', this.value);
+            });
+            lapsTbody.appendChild(tr);
+        }
+    }
+
+    function updateActionButtons() {
+        const selected = Array.from(document.querySelectorAll('.lap-checkbox:checked')).map(cb => parseInt(cb.value));
+        deleteBtn.disabled = selected.length === 0;
+        if (selected.length >= 2) {
+            selected.sort((a, b) => a - b);
+            let isContiguous = selected.every((val, i) => i === 0 || val === selected[i-1] + 1);
+            mergeBtn.disabled = !isContiguous;
+        } else {
+            mergeBtn.disabled = true;
+        }
+    }
+
+    mergeBtn.addEventListener('click', function() {
+        const selected = Array.from(document.querySelectorAll('.lap-checkbox:checked')).map(cb => parseInt(cb.value)).sort((a, b) => a - b);
+        const laps = xmlDoc.getElementsByTagName('Lap');
+        const targetLap = laps[selected[0]];
+        let newTotalTime = getXmlValue(targetLap, 'TotalTimeSeconds'), newDistance = getXmlValue(targetLap, 'DistanceMeters'), newCalories = getXmlValue(targetLap, 'Calories'), newMaxSpeed = getXmlValue(targetLap, 'MaximumSpeed');
+        let weightedHRAccum = getNestedXmlValue(targetLap, 'AverageHeartRateBpm', 'Value') * newTotalTime, totalHRTime = newTotalTime, newMaxHR = getNestedXmlValue(targetLap, 'MaximumHeartRateBpm', 'Value'), newMinHR = getMinHr(targetLap);
+        let newIntensity = getXmlString(targetLap, 'Intensity', 'Active');
+        const targetTrack = targetLap.getElementsByTagName('Track')[0];
+
+        for (let i = 1; i < selected.length; i++) {
+            const source = laps[selected[i]];
+            const sourceTime = getXmlValue(source, 'TotalTimeSeconds');
+            newTotalTime += sourceTime; newDistance += getXmlValue(source, 'DistanceMeters'); newCalories += getXmlValue(source, 'Calories');
+            newMaxSpeed = Math.max(newMaxSpeed, getXmlValue(source, 'MaximumSpeed'));
+            const sAvg = getNestedXmlValue(source, 'AverageHeartRateBpm', 'Value');
+            if (sAvg !== null) { weightedHRAccum += (sAvg * sourceTime); totalHRTime += sourceTime; }
+            newMaxHR = Math.max(newMaxHR, getNestedXmlValue(source, 'MaximumHeartRateBpm', 'Value'));
+            const sMin = getMinHr(source);
+            if (sMin !== null) newMinHR = (newMinHR === null) ? sMin : Math.min(newMinHR, sMin);
+            if (getXmlString(source, 'Intensity') === 'Active') newIntensity = 'Active';
+            Array.from(source.getElementsByTagName('Trackpoint')).forEach(tp => targetTrack.appendChild(tp));
+            source.setAttribute('data-delete', 'true');
+        }
+        targetLap.getElementsByTagName('TotalTimeSeconds')[0].textContent = newTotalTime;
+        targetLap.getElementsByTagName('DistanceMeters')[0].textContent = newDistance;
+        targetLap.getElementsByTagName('Calories')[0].textContent = newCalories;
+        targetLap.getElementsByTagName('MaximumSpeed')[0].textContent = newMaxSpeed;
+        setNestedXmlValue(targetLap, 'AverageHeartRateBpm', 'Value', Math.round(weightedHRAccum / totalHRTime));
+        setNestedXmlValue(targetLap, 'MaximumHeartRateBpm', 'Value', Math.round(newMaxHR));
+        if (newMinHR !== null && getNestedXmlValue(targetLap, 'MinimumHeartRateBpm', 'Value') !== null) setNestedXmlValue(targetLap, 'MinimumHeartRateBpm', 'Value', Math.round(newMinHR));
+        setXmlString(targetLap, 'Intensity', newIntensity);
+        Array.from(xmlDoc.getElementsByTagName('Lap')).forEach(l => { if (l.getAttribute('data-delete') === 'true') l.parentNode.removeChild(l); });
+        renderLaps();
+    });
+
+    deleteBtn.addEventListener('click', () => {
+        Array.from(document.querySelectorAll('.lap-checkbox:checked')).map(cb => parseInt(cb.value)).sort((a,b) => b-a).forEach(idx => xmlDoc.getElementsByTagName('Lap')[idx].parentNode.removeChild(xmlDoc.getElementsByTagName('Lap')[idx]));
+        renderLaps();
+    });
+
+    downloadBtn.addEventListener('click', () => {
+        const blob = new Blob([(new XMLSerializer()).serializeToString(xmlDoc)], { type: 'application/xml' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = originalFilename.replace('.tcx', '_edited.tcx');
+        a.click();
+    });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
